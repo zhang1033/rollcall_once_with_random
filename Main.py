@@ -10,11 +10,12 @@ import traceback as tb
 import threading as thd
 import os,sys,json,time,gc
 import main_strings as mainstr
+import platform as plfm
 LOCAL_MESSAGE={}
 view_redundant_window=[]
 pre_window_errors={}
 no_value=object()
-self_settings_default={"is_rollcall_once":False,"apply_config_noerror":False,"window_topmost":False}
+self_settings_default={"is_rollcall_once":False,"apply_config_noerror":False,"window_topmost":False,"delay_rollcall":False,"delay_rollcall_time_ms":2000}
 self_settings=dict(self_settings_default)
 def configs_access(item,value=no_value,action="load"):
     global self_settings,self_settings_default
@@ -86,6 +87,8 @@ def load_settings(encoding=None):
                     encoding="utf-8"#使用utf-8编码
             with open("./config.json","r",encoding=encoding) as r:
                 self_settings=json.loads(r.read())
+        #except ValueError as json_error:#检查json语法是否正确（Python3.4兼容）
+        #    pre_window_error_show("json文件\"config.json\"的语法不正确，已使用默认配置，原因：\n"+str(json_error),"随机抽取-json配置错误",0x10)
         except json.decoder.JSONDecodeError as json_error:#检查json语法是否正确
             pre_window_error_show("json文件\"config.json\"的语法不正确，已使用默认配置，原因：\n"+str(json_error),"随机抽取-json配置错误",0x10)
         except FileNotFoundError as json_error:#检查文件存在性（基本被上面的if-else代码优先执行）
@@ -141,7 +144,15 @@ def program_exit():
     Process_Local_Message("WM_QUIT","GLOBAL","boardcast")
     main.destroy()
     sys.exit()
-c.windll.shcore.SetProcessDpiAwareness(2) ##这个就是声明高dpi缩放替代中的“应用程序”选项，千万不要使用，在200%以上4k分辨率中会出BUG。现在已解决。
+sys_version=plfm.version().split(".")
+for index in range(0,len(sys_version),1):
+    sys_version[index]=int(sys_version[index])
+if (sys_version[0]==6) and (sys_version[1]<3):
+    c.windll.user32.SetProcessDPIAware() #兼容Windows Vista到Windows8的系统
+elif ((sys_version[0]==6) and (sys_version[1]>3)) or (sys_version[0]>=10):
+    c.windll.shcore.SetProcessDpiAwareness(2) ##这个就是声明高dpi缩放替代中的“应用程序”选项，千万不要使用，在200%以上4k分辨率中会出BUG。现在已解决。
+else:
+    pass
 #改变工作路径为当前程序运行目录（工作目录，顾名思义就是“.”，类似于cmd的%cd%）
 if os.path.isfile(sys.argv[0]):
     cwd_path=os.path.abspath(sys.argv[0])
@@ -199,6 +210,7 @@ def name_rand(name_rand_times=0):
                         if rollcall_once_MB.MessageBox_return == 6:
                             rollcall_once_namelist=list(name_database)
                             del rollcall_once_namelist[rollcall_once_namelist.index(name_local)]
+                            start.config(state="normal")
                         else:
                             start.config(state="disable")
                     rollcall_once_MB=Win32_MessageboxW_Base(main,
@@ -211,7 +223,16 @@ def name_rand(name_rand_times=0):
                                                 0x44,
                                                 finish_rollcall_once
                                                 )
-            start.config(state="normal")#按钮变得可点击
+                else:
+                    if configs_access("delay_rollcall"):
+                        main.after(configs_access("delay_rollcall_time_ms"),lambda:start.config(state="normal"))
+                    else:
+                        start.config(state="normal")#按钮变得可点击
+            else:
+                if configs_access("delay_rollcall"):
+                    main.after(configs_access("delay_rollcall_time_ms"),lambda:start.config(state="normal"))
+                else:
+                    start.config(state="normal")
     #if "STOP_SELECTION" in LOCAL_MESSAGE["NAMELIST_UPDATED"]:
     if Process_Local_Message("NAMELIST_UPDATED","STOP_SELECTION","exist"):
         Process_Local_Message("NAMELIST_UPDATED","STOP_SELECTION","remove")
@@ -362,16 +383,15 @@ def topmost_window():
     configs_access("window_topmost",value=window_topmost.get(),action="change")
 #不重复抽取的名单检测
 def rollcall_once_cmd():
-    if len(name_database)<=3 and rollcall_once.get():
+    rollcall_once.set(not(rollcall_once.get()))
+    if len(name_database)<=3 and rollcall_once.get()==False:
         def continue_to_rollcall_once():
-            if not enable_rollcall_once.MessageBox_return == 6:
-                rollcall_once.set(False)
-                configs_access("is_rollcall_once",value=False,action="change")
-            else:
+            if enable_rollcall_once.MessageBox_return == 6:
                 if len(name_database)<=1:
                     rollcall_once.set(False)
                     configs_access("is_rollcall_once",value=False,action="change")
                 else:
+                    rollcall_once.set(True)
                     configs_access("is_rollcall_once",value=True,action="change")
             rollcall_once_namelist=list(name_database)
         enable_rollcall_once=Win32_MessageboxW_Base(
@@ -386,9 +406,14 @@ def rollcall_once_cmd():
             continue_to_rollcall_once
             )
     else:
+        rollcall_once.set(not(rollcall_once.get()))
         configs_access("is_rollcall_once",value=rollcall_once.get(),action="change")
 def apply_config_noerror_cmd():
     configs_access("apply_config_noerror",value=apply_config_noerror.get(),action="change")
+delay_rollcall=tk.BooleanVar()
+delay_rollcall.set(configs_access("delay_rollcall"))
+def delay_rollcall_cmd():
+    configs_access("delay_rollcall",value=delay_rollcall.get(),action="change")
 #关于我的弹出子窗口
 about_me_window=None
 def about_me(exist=None):
@@ -567,6 +592,34 @@ def about_program(exist=None):
             about_program_window=create()
         else:
             raise
+delay_rollcall_set_window=None
+def delay_rollcall_set(exist=None):
+    global delay_rollcall_set_window
+    try:
+        def create():
+            window=tk.Toplevel(bg="#B6EEFF")
+            window.minsize(int(300*dpi),int(200*dpi))
+            window.title("设置延迟点名时间-随机抽取（草稿）")
+            window.iconbitmap(bitmap=cwd_path)
+            window.resizable(False,False)
+            window.transient(main)
+            window.grab_set()
+            delay_rollcall_label=tk.Label(window,text="输入延迟点名时间（单位：毫秒）",bg="#B6EEFF",fg="#06212B",font=("仿宋",14),justify="left")
+            delay_rollcall_label.pack(ipady=10*dpi,ipadx=5*dpi)
+            delay_rollcall_time=tk.IntVar()
+            delay_rollcall_time.set(configs_access("delay_rollcall_time_ms"))
+            delay_rollcall_time_entry=tk.Spinbox(window,from_=0,to=100)
+            delay_rollcall_time_entry.pack()
+            return(window)
+        if exist==None:
+            delay_rollcall_set_window=create()
+        else:
+            delay_rollcall_set_window.deiconify()
+    except tk.TclError as e:
+        if str(e)==f"bad window path name \"{delay_rollcall_set_window}\"":
+            delay_rollcall_set_window=create()
+        else:
+            raise
 def running_time_compute(start_time,end_time):
     running_time=(end_time-start_time)*1000
     if running_time<=1:
@@ -685,7 +738,7 @@ def edit_config(exist=None):
                             success_saved=1
                             if is_save==1:
                                 if os.path.isdir("./namelist.json")==True:
-                                    msg.showerror("编辑配置文件",f"配置文件\"namelist.json\"为目录，请在保存之前删除此目录。",parent=window)
+                                    msg.showerror("编辑配置文件","配置文件\"namelist.json\"为目录，请在保存之前删除此目录。",parent=window)
                                     success_saved=0
                                 else:
                                     try:
@@ -980,6 +1033,8 @@ window_menus.add_checkbutton(label="窗口置顶",command=topmost_window,variabl
 config_menus=tk.Menu(config_menu,tearoff=False,bg="#50E885",activebackground="#73d3A0",activeforeground="#102305")
 config_menu.config(menu=config_menus)
 config_menus.add_checkbutton(label="启用不重复抽取",command=rollcall_once_cmd,variable=rollcall_once)
+config_menus.add_checkbutton(label="启用延迟点名",command=delay_rollcall_cmd,variable=delay_rollcall)
+config_menus.add_command(label="延迟点名时间设置",command=lambda:delay_rollcall_set(exist=delay_rollcall_set_window))
 config_menus.add_checkbutton(label="应用配置时无报错弹窗",command=apply_config_noerror_cmd,variable=apply_config_noerror)
 #重新加载UTF-8编码
 def reload_utf_8():
@@ -1041,7 +1096,6 @@ def json_config(encoding=None,event=None):#encoding默认值为空
                     Process_Local_Message("NAMELIST_UPDATED","STOP_SELECTION","boardcast")
                 name_database.clear()
                 name_database=names
-                rollcall_once_namelist=list(name_database)
                 if not len(name_database)==len(list(set(name_database))):
                     Process_Local_Message("FILE_NOT_SAVED","namelist","boardcast")
                     def MessageBox_Return():
@@ -1151,6 +1205,7 @@ def json_config(encoding=None,event=None):#encoding默认值为空
                             )
                     name_database1=list(name_database)
                     name_database=list(dict.fromkeys(name_database))
+                    rollcall_once_namelist=list(name_database)
                 del names
             if name_database==[]:#检查是否为空列表
                 c.windll.user32.MessageBoxW(main.winfo_id(),"json配置为空，请在当前目录下的\"namelist.json\"中写入一个列表。","随机抽取-json配置为空",0x10)#弹窗报错
@@ -1190,6 +1245,8 @@ def json_config(encoding=None,event=None):#encoding默认值为空
     except Exception:
         try:
             raise
+        #except ValueError as json_error:#检查json语法是否正确（Python3.4兼容）
+        #    pre_window_error_show("json语法不正确，原因：\n"+str(json_error),"随机抽取-json名单格式错误",0x10)
         except json.decoder.JSONDecodeError as json_error:#检查json语法是否正确
             pre_window_error_show("json语法不正确，原因：\n"+str(json_error),"随机抽取-json名单格式错误",0x10)
         except FileNotFoundError as json_error:#检查文件存在性（基本被上面的if-else代码优先执行）
@@ -1263,5 +1320,8 @@ main.after(0,event_case)
 ##        main.bind(i[0],lambda event:i[1](*i[2]))
 ##key_event()
 main.bind("<Key-Alt_R>",lambda event:json_config())
+main.bind("<Key-Right>",lambda event:start.invoke())
+main.bind("<Key-Down>",lambda event:start.invoke())
+main.bind("<Key-Next>",lambda event:start.invoke())
 #防止主窗口消失
 main.mainloop()
