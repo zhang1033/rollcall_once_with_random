@@ -6,6 +6,7 @@ import tkinter.font as tkf
 import tkinter.ttk as ttk
 import tkinter.messagebox as msg
 import ctypes as c
+import ctypes.wintypes as cw
 import traceback as tb
 import threading as thd
 import os,sys,json,time,gc
@@ -169,6 +170,13 @@ main.title("随机抽取")#标题
 main.config(bg="#90f4b3")#设置背景颜色
 main.attributes("-alpha",0.8)#设置窗口透明度
 main.protocol("WM_DELETE_WINDOW",program_exit)
+##touch=c.windll.user32.RegisterTouchWindow(main.winfo_id(),1)
+##class MSG(c.Structure):
+##    _fields_=[
+##        (main.winfo_id(),cw.HWND),
+##        (0x240,c.c_uint),
+##        c.windll.user32.GetTouchInputInfo()
+##        ]
 name_font=tkf.Font(family="楷体",size=75,weight="bold")#设置姓名显示字体
 start_button_font=tkf.Font(family="楷体",size=40)#设置开始按钮显示字体
 name=tk.Label(main,text="",font=name_font,wraplength=490*dpi,bg="#90f4b3")#设置姓名显示标签，font为在上面的字体样式
@@ -225,17 +233,19 @@ def name_rand(name_rand_times=0):
                                                 )
                 else:
                     if configs_access("delay_rollcall"):
-                        main.after(configs_access("delay_rollcall_time_ms"),lambda:start.config(state="normal"))
+                        delay_rollcall=main.after(configs_access("delay_rollcall_time_ms"),lambda:start.config(state="normal"))
                     else:
                         start.config(state="normal")#按钮变得可点击
             else:
                 if configs_access("delay_rollcall"):
-                    main.after(configs_access("delay_rollcall_time_ms"),lambda:start.config(state="normal"))
+                    delay_rollcall=main.after(configs_access("delay_rollcall_time_ms"),lambda:start.config(state="normal"))
                 else:
                     start.config(state="normal")
     #if "STOP_SELECTION" in LOCAL_MESSAGE["NAMELIST_UPDATED"]:
     if Process_Local_Message("NAMELIST_UPDATED","STOP_SELECTION","exist"):
         Process_Local_Message("NAMELIST_UPDATED","STOP_SELECTION","remove")
+        if "delay_rollcall" in locals():
+            main.after_cancel(delay_rollcall)
         start.config(state="normal")
     else:
         if name_rand_times<=25:
@@ -383,9 +393,11 @@ def topmost_window():
     configs_access("window_topmost",value=window_topmost.get(),action="change")
 #不重复抽取的名单检测
 def rollcall_once_cmd():
+    global rollcall_once_namelist
     rollcall_once.set(not(rollcall_once.get()))
     if len(name_database)<=3 and rollcall_once.get()==False:
         def continue_to_rollcall_once():
+            global rollcall_once_namelist
             if enable_rollcall_once.MessageBox_return == 6:
                 if len(name_database)<=1:
                     rollcall_once.set(False)
@@ -393,7 +405,8 @@ def rollcall_once_cmd():
                 else:
                     rollcall_once.set(True)
                     configs_access("is_rollcall_once",value=True,action="change")
-            rollcall_once_namelist=list(name_database)
+            if rollcall_once_namelist==[]:
+                rollcall_once_namelist=list(name_database)
         enable_rollcall_once=Win32_MessageboxW_Base(
             main,
             """    检测到名单元素低于4个，在不重复抽选下不会达到预期效果。如果此时再进行抽取，会有大问题。
@@ -408,6 +421,8 @@ def rollcall_once_cmd():
     else:
         rollcall_once.set(not(rollcall_once.get()))
         configs_access("is_rollcall_once",value=rollcall_once.get(),action="change")
+        if rollcall_once_namelist==[]:
+            rollcall_once_namelist=list(name_database)
 def apply_config_noerror_cmd():
     configs_access("apply_config_noerror",value=apply_config_noerror.get(),action="change")
 delay_rollcall=tk.BooleanVar()
@@ -606,10 +621,24 @@ def delay_rollcall_set(exist=None):
             window.grab_set()
             delay_rollcall_label=tk.Label(window,text="输入延迟点名时间（单位：毫秒）",bg="#B6EEFF",fg="#06212B",font=("仿宋",14),justify="left")
             delay_rollcall_label.pack(ipady=10*dpi,ipadx=5*dpi)
-            delay_rollcall_time=tk.IntVar()
+            delay_rollcall_time=tk.StringVar()
             delay_rollcall_time.set(configs_access("delay_rollcall_time_ms"))
-            delay_rollcall_time_entry=tk.Spinbox(window,from_=0,to=100)
+            delay_rollcall_time_entry=tk.Spinbox(window,from_=1,to=2**64,textvariable=delay_rollcall_time)
             delay_rollcall_time_entry.pack()
+            values={"per_value":None,"new_value":None}
+            def check_delay_rollcall(type_value=True,event=None):
+                nonlocal values
+                if type_value:
+                    values["per_value"]=delay_rollcall_time_entry.get()
+                    window.after(1,lambda:values.update({"new_value":delay_rollcall_time.get()}))
+                def check_delay_rollcall_value():
+                    if not str(values["new_value"]).isdigit():
+                        values["new_value"]=values["per_value"]
+                        delay_rollcall_time_entry.delete(0,"end")
+                        delay_rollcall_time_entry.insert("end",values["per_value"])
+                        delay_rollcall_time_entry.selection("range",0,"end")
+                window.after(2,check_delay_rollcall_value)
+            delay_rollcall_time_entry.bind("<Key>",check_delay_rollcall)
             return(window)
         if exist==None:
             delay_rollcall_set_window=create()
@@ -1205,6 +1234,7 @@ def json_config(encoding=None,event=None):#encoding默认值为空
                             )
                     name_database1=list(name_database)
                     name_database=list(dict.fromkeys(name_database))
+                if configs_access("is_rollcall_once"):
                     rollcall_once_namelist=list(name_database)
                 del names
             if name_database==[]:#检查是否为空列表
@@ -1309,19 +1339,24 @@ def event_case():
     main.after(5,is_window_size_changed)
     main.after(5,event_case)
 main.after(0,event_case)
-##def key_event():
-##    def menu_invoke(menus,index,event=None):
-##        menus.invoke(index)
-##    ken_events=[("<Control-Alt-r>",menu_invoke,(reload,0)),
-##                ("<Control-Alt-s>",menu_invoke,(reload,1)),
-##                ("<Control-Alt-t>",menu_invoke,(reload,2)),
-##                ("<Control-Alt-u>",menu_invoke,(reload,3))]
-##    for i in ken_events:
-##        main.bind(i[0],lambda event:i[1](*i[2]))
-##key_event()
-main.bind("<Key-Alt_R>",lambda event:json_config())
-main.bind("<Key-Right>",lambda event:start.invoke())
-main.bind("<Key-Down>",lambda event:start.invoke())
-main.bind("<Key-Next>",lambda event:start.invoke())
+
+def key_event():
+    ken_events=[("<Control-Alt-r>",lambda event:reload.invoke(0)),
+                ("<Control-Alt-F1>",lambda event:reload.invoke(1)),
+                ("<Control-Alt-F2>",lambda event:reload.invoke(2)),
+                ("<Control-Alt-F3>",lambda event:reload.invoke(3)),
+                ("<Key-Right>",lambda event:start.invoke()),
+                ("<Key-Down>",lambda event:start.invoke()),
+                ("<Key-Next>",lambda event:start.invoke()),
+                ("<Control-Alt-e>",lambda event:file_menus.invoke(1)),
+                ("<Control-Shift-T>",lambda event:window_menus.invoke(1)),
+                ("<Shift-F1>",lambda event:about_menu.invoke(0)),
+                ("<F1>",lambda event:about_menu.invoke(1)),
+                ("<F11>",fullscr_button),
+                ("<Control-O>",lambda event:config_menus.invoke(0))
+                ]
+    for hotkey in ken_events:
+        main.bind(*hotkey)
+key_event()
 #防止主窗口消失
 main.mainloop()
